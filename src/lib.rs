@@ -91,9 +91,9 @@
     // Deny all Clippy lints even Clippy allow some by default
     // https://rust-lang.github.io/rust-clippy/master/
     clippy::all,
-    clippy::restriction,
+    // clippy::restriction,
     clippy::pedantic,
-    clippy::nursery,
+    // clippy::nursery,
     clippy::cargo,
 )]
 #![allow(

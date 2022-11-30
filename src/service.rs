@@ -57,7 +57,7 @@ impl Debug for S3Service {
 impl Deref for SharedS3Service {
     type Target = S3Service;
     fn deref(&self) -> &Self::Target {
-        &*self.inner
+        &self.inner
     }
 }
 
@@ -402,9 +402,9 @@ async fn check_presigned_url(
     let presigned_url = signature_v4::PresignedUrl::from_query(qs)
         .map_err(|err| invalid_request!("Missing presigned fields", err))?;
 
-    let content_sha256: Option<AmzContentSha256<'_>> = extract_amz_content_sha256(&ctx.headers)?;
+    // let content_sha256: Option<AmzContentSha256<'_>> = extract_amz_content_sha256(&ctx.headers)?;
 
-    drop(content_sha256); // how to use it?
+    // drop(content_sha256); // how to use it?
 
     let auth_provider = match auth {
         Some(a) => a,
@@ -493,7 +493,7 @@ async fn check_header_auth(
                 uri_path,
                 query_strings,
                 &headers,
-                signature_v4::Payload::MultipleChunks,
+                &signature_v4::Payload::MultipleChunks,
             )
         } else {
             let bytes = std::mem::take(&mut ctx.body)
@@ -514,7 +514,7 @@ async fn check_header_auth(
                 uri_path,
                 query_strings,
                 &headers,
-                payload,
+                &payload,
             );
 
             ctx.body = Body::from(bytes);

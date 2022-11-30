@@ -72,7 +72,7 @@ impl Error for S3Error {
         self.0
             .source
             .as_deref()
-            .map(|e| -> &(dyn Error + 'static) { &*e })
+            .map(|e| -> &(dyn Error + 'static) { e })
     }
 }
 

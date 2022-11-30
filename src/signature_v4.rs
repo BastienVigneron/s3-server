@@ -183,7 +183,7 @@ pub fn create_canonical_request(
     uri_path: &str,
     query_strings: &[(impl AsRef<str>, impl AsRef<str>)],
     headers: &OrderedHeaders<'_>,
-    payload: Payload<'_>,
+    payload: &Payload<'_>,
 ) -> String {
     String::with_capacity(256)
         .also(|ans| {
@@ -268,7 +268,7 @@ pub fn create_canonical_request(
                 Payload::SingleChunk(data) => ans.push_str(&crypto::hex_sha256(data)),
                 Payload::MultipleChunks => ans.push_str("STREAMING-AWS4-HMAC-SHA256-PAYLOAD"),
             }
-            drop(payload);
+            // drop(payload);
         })
 }
 
@@ -483,7 +483,7 @@ mod tests {
         let qs: &[(String, String)] = &[];
 
         let canonical_request =
-            create_canonical_request(&method, path, qs, &headers, Payload::Empty);
+            create_canonical_request(&method, path, qs, &headers, &Payload::Empty);
 
         assert_eq!(
             canonical_request,
@@ -549,7 +549,7 @@ mod tests {
             path,
             qs,
             &headers,
-            Payload::SingleChunk(payload.as_bytes()),
+            &Payload::SingleChunk(payload.as_bytes()),
         );
 
         assert_eq!(
@@ -611,7 +611,7 @@ mod tests {
         let qs: &[(String, String)] = &[];
 
         let canonical_request =
-            create_canonical_request(&method, path, qs, &headers, Payload::MultipleChunks);
+            create_canonical_request(&method, path, qs, &headers, &Payload::MultipleChunks);
 
         assert_eq!(
             canonical_request,
@@ -755,7 +755,7 @@ mod tests {
         let method = Method::GET;
 
         let canonical_request =
-            create_canonical_request(&method, path, query_strings, &headers, Payload::Empty);
+            create_canonical_request(&method, path, query_strings, &headers, &Payload::Empty);
         assert_eq!(
             canonical_request,
             concat!(
@@ -813,7 +813,7 @@ mod tests {
         let method = Method::GET;
 
         let canonical_request =
-            create_canonical_request(&method, path, query_strings, &headers, Payload::Empty);
+            create_canonical_request(&method, path, query_strings, &headers, &Payload::Empty);
 
         assert_eq!(
             canonical_request,
