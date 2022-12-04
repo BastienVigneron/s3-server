@@ -1,6 +1,7 @@
 ---
 kind: pipeline
 name: arm64
+type: kubernetes
 
 platform:
   os: linux
@@ -11,6 +12,21 @@ steps:
     image: rust
     commands:
       - cargo build --release --features="binary" --target aarch64-unknown-linux-gnu
+
+  - name: docker
+    image: plugins/docker
+    tag: [linux-arm64]
+    environment:
+      PLUGIN_MTU: 1300
+    settings:
+      dockerfile: Dockerfile
+      username: drone_ci
+      password:
+        from_secret: registry_password
+      repo: git.solutions.im/solutions.im/s3server
+      registry: git.solutions.im
+      auto_tag: true
+      auto_tag_suffix: linux-arm64
 
 volumes:
   - name: deps
