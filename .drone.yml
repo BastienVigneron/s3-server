@@ -1,0 +1,22 @@
+---
+kind: pipeline
+name: arm64
+
+platform:
+  os: linux
+  arch: arm64
+
+steps:
+  - name: build
+    image: rust
+    commands:
+      - cargo build --release --features="binary" --target aarch64-unknown-linux-gnu
+
+volumes:
+  - name: deps
+    temp: {}
+
+trigger:
+  event:
+    - tag
+    - release
