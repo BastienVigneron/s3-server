@@ -39,7 +39,7 @@ pub struct Multipart {
 impl Multipart {
     /// Finds field value
     #[must_use]
-    pub fn find_field_value<'a>(&'a self, name: &str) -> Option<&'a str> {
+    pub fn find_field_value(&self, name: &str) -> Option<&str> {
         self.fields
             .iter()
             .rev()

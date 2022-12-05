@@ -183,24 +183,83 @@ const fn operation_error<E>(e: E) -> S3StorageError<E> {
 #[async_trait]
 impl S3Storage for FileSystem {
     #[tracing::instrument]
-    async fn create_bucket(
+    async fn complete_multipart_upload(
         &self,
-        input: CreateBucketRequest,
-    ) -> S3StorageResult<CreateBucketOutput, CreateBucketError> {
-        let path = trace_try!(self.get_bucket_path(&input.bucket));
+        input: CompleteMultipartUploadRequest,
+    ) -> S3StorageResult<CompleteMultipartUploadOutput, CompleteMultipartUploadError> {
+        let CompleteMultipartUploadRequest {
+            multipart_upload,
+            bucket,
+            key,
+            upload_id,
+            ..
+        } = input;
 
-        if path.exists() {
-            let err = CreateBucketError::BucketAlreadyExists(String::from(
-                "The requested bucket name is not available. \
-                    The bucket namespace is shared by all users of the system. \
-                    Please select a different name and try again.",
-            ));
-            return Err(operation_error(err));
+        let multipart_upload = if let Some(multipart_upload) = multipart_upload {
+            multipart_upload
+        } else {
+            let err = code_error!(InvalidPart, "Missing multipart_upload");
+            return Err(err.into());
+        };
+
+        let object_path = trace_try!(self.get_object_path(&bucket, &key));
+        let file = trace_try!(File::create(&object_path).await);
+        let mut writer = BufWriter::new(file);
+
+        let mut cnt: i64 = 0;
+        for part in multipart_upload.parts.into_iter().flatten() {
+            let part_number = trace_try!(part
+                .part_number
+                .ok_or_else(|| { io::Error::new(io::ErrorKind::NotFound, "Missing part_number") }));
+            cnt = cnt.wrapping_add(1);
+            if part_number != cnt {
+                trace_try!(Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "InvalidPartOrder"
+                )));
+            }
+            let part_path_str = format!(".upload_id-{}.part-{}", upload_id, part_number);
+            let part_path = trace_try!(Path::new(&part_path_str).absolutize_virtually(&self.root));
+
+            let mut reader = trace_try!(File::open(&part_path).await);
+            let (ret, duration) =
+                time::count_duration(futures::io::copy(&mut reader, &mut writer)).await;
+            let size = trace_try!(ret);
+
+            debug!(
+                from = %part_path.display(),
+                to = %object_path.display(),
+                ?size,
+                ?duration,
+                "CompleteMultipartUpload: write file",
+            );
+            trace_try!(async_fs::remove_file(&part_path).await);
         }
+        drop(writer);
 
-        trace_try!(async_fs::create_dir(&path).await);
+        let file_size = trace_try!(async_fs::metadata(&object_path).await).len();
 
-        let output = CreateBucketOutput::default(); // TODO: handle other fields
+        let (md5_sum, duration) = {
+            let (ret, duration) = time::count_duration(self.get_md5_sum(&bucket, &key)).await;
+            let md5_sum = trace_try!(ret);
+            (md5_sum, duration)
+        };
+
+        debug!(
+            sum = ?md5_sum,
+            path = %object_path.display(),
+            size = ?file_size,
+            ?duration,
+            "CompleteMultipartUpload: calculate md5 sum",
+        );
+
+        let e_tag = format!("\"{}\"", md5_sum);
+        let output = CompleteMultipartUploadOutput {
+            bucket: Some(bucket),
+            key: Some(key),
+            e_tag: Some(e_tag),
+            ..CompleteMultipartUploadOutput::default()
+        };
         Ok(output)
     }
 
@@ -250,6 +309,45 @@ impl S3Storage for FileSystem {
             ..CopyObjectOutput::default()
         };
 
+        Ok(output)
+    }
+
+    #[tracing::instrument]
+    async fn create_multipart_upload(
+        &self,
+        input: CreateMultipartUploadRequest,
+    ) -> S3StorageResult<CreateMultipartUploadOutput, CreateMultipartUploadError> {
+        let upload_id = Uuid::new_v4().to_string();
+
+        let output = CreateMultipartUploadOutput {
+            bucket: Some(input.bucket),
+            key: Some(input.key),
+            upload_id: Some(upload_id),
+            ..CreateMultipartUploadOutput::default()
+        };
+
+        Ok(output)
+    }
+
+    #[tracing::instrument]
+    async fn create_bucket(
+        &self,
+        input: CreateBucketRequest,
+    ) -> S3StorageResult<CreateBucketOutput, CreateBucketError> {
+        let path = trace_try!(self.get_bucket_path(&input.bucket));
+
+        if path.exists() {
+            let err = CreateBucketError::BucketAlreadyExists(String::from(
+                "The requested bucket name is not available. \
+                    The bucket namespace is shared by all users of the system. \
+                    Please select a different name and try again.",
+            ));
+            return Err(operation_error(err));
+        }
+
+        trace_try!(async_fs::create_dir(&path).await);
+
+        let output = CreateBucketOutput::default(); // TODO: handle other fields
         Ok(output)
     }
 
@@ -711,23 +809,6 @@ impl S3Storage for FileSystem {
     }
 
     #[tracing::instrument]
-    async fn create_multipart_upload(
-        &self,
-        input: CreateMultipartUploadRequest,
-    ) -> S3StorageResult<CreateMultipartUploadOutput, CreateMultipartUploadError> {
-        let upload_id = Uuid::new_v4().to_string();
-
-        let output = CreateMultipartUploadOutput {
-            bucket: Some(input.bucket),
-            key: Some(input.key),
-            upload_id: Some(upload_id),
-            ..CreateMultipartUploadOutput::default()
-        };
-
-        Ok(output)
-    }
-
-    #[tracing::instrument]
     async fn upload_part(
         &self,
         input: UploadPartRequest,
@@ -771,87 +852,6 @@ impl S3Storage for FileSystem {
             ..UploadPartOutput::default()
         };
 
-        Ok(output)
-    }
-
-    #[tracing::instrument]
-    async fn complete_multipart_upload(
-        &self,
-        input: CompleteMultipartUploadRequest,
-    ) -> S3StorageResult<CompleteMultipartUploadOutput, CompleteMultipartUploadError> {
-        let CompleteMultipartUploadRequest {
-            multipart_upload,
-            bucket,
-            key,
-            upload_id,
-            ..
-        } = input;
-
-        let multipart_upload = if let Some(multipart_upload) = multipart_upload {
-            multipart_upload
-        } else {
-            let err = code_error!(InvalidPart, "Missing multipart_upload");
-            return Err(err.into());
-        };
-
-        let object_path = trace_try!(self.get_object_path(&bucket, &key));
-        let file = trace_try!(File::create(&object_path).await);
-        let mut writer = BufWriter::new(file);
-
-        let mut cnt: i64 = 0;
-        for part in multipart_upload.parts.into_iter().flatten() {
-            let part_number = trace_try!(part
-                .part_number
-                .ok_or_else(|| { io::Error::new(io::ErrorKind::NotFound, "Missing part_number") }));
-            cnt = cnt.wrapping_add(1);
-            if part_number != cnt {
-                trace_try!(Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    "InvalidPartOrder"
-                )));
-            }
-            let part_path_str = format!(".upload_id-{}.part-{}", upload_id, part_number);
-            let part_path = trace_try!(Path::new(&part_path_str).absolutize_virtually(&self.root));
-
-            let mut reader = trace_try!(File::open(&part_path).await);
-            let (ret, duration) =
-                time::count_duration(futures::io::copy(&mut reader, &mut writer)).await;
-            let size = trace_try!(ret);
-
-            debug!(
-                from = %part_path.display(),
-                to = %object_path.display(),
-                ?size,
-                ?duration,
-                "CompleteMultipartUpload: write file",
-            );
-            trace_try!(async_fs::remove_file(&part_path).await);
-        }
-        drop(writer);
-
-        let file_size = trace_try!(async_fs::metadata(&object_path).await).len();
-
-        let (md5_sum, duration) = {
-            let (ret, duration) = time::count_duration(self.get_md5_sum(&bucket, &key)).await;
-            let md5_sum = trace_try!(ret);
-            (md5_sum, duration)
-        };
-
-        debug!(
-            sum = ?md5_sum,
-            path = %object_path.display(),
-            size = ?file_size,
-            ?duration,
-            "CompleteMultipartUpload: calculate md5 sum",
-        );
-
-        let e_tag = format!("\"{}\"", md5_sum);
-        let output = CompleteMultipartUploadOutput {
-            bucket: Some(bucket),
-            key: Some(key),
-            e_tag: Some(e_tag),
-            ..CompleteMultipartUploadOutput::default()
-        };
         Ok(output)
     }
 }
